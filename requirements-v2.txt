@@ -1,0 +1,16 @@
+# Core dependencies for Azure AI Foundry Agent
+fastapi==0.121.1
+uvicorn[standard]==0.34.2
+python-dotenv==1.0.1
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.20
+
+# Azure AI Foundry - Using azure-ai-agents SDK (NOT azure-ai-projects)
+azure-ai-agents==1.1.0
+azure-identity==1.20.0
+azure-core==1.36.0
+
+# Optional: For better performance
+httpx==0.28.1
+pydantic==2.12.4
+pydantic-settings==2.12.0

@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+README.md
+*.md
+
+# Old files
+agent.py
+unificar.py
+*.pdf
+FundamentosDeSistemasDeBasesDeDatos.pdf
+LibroBasesDeDatos.pdf
+SQLNotesForProfessionals.pdf
+databaseengineeringtheory.pdf
+
+# Environment (will be set via Render env vars)
+.env.local
+.env.development
+.env.production
+
+# Alembic (if you had migrations)
+alembic/

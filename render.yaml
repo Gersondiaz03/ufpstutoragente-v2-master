@@ -1,0 +1,27 @@
+# Render Blueprint for UFPS Tutor Agent
+services:
+  - type: web
+    name: ufpstutor-agent
+    env: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: PORT
+        value: 8100
+      - key: AZURE_EXISTING_AGENT_ID
+        sync: false
+      - key: AZURE_EXISTING_AIPROJECT_ENDPOINT
+        sync: false
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+    healthCheckPath: /health

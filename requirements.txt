@@ -1,0 +1,28 @@
+# Core web framework
+fastapi
+uvicorn[standard]
+python-dotenv
+python-jose[cryptography]
+pydantic
+starlette
+
+# OpenAI + Azure OpenAI (Python SDK) and Agents SDK
+openai
+openai-agents
+
+# RAG stack: vector store + embeddings + utils
+chromadb
+langchain-core
+langchain-text-splitters
+langchain-chroma
+langchain-nomic
+langchain-openai
+nomic
+PyMuPDF
+requests
+
+# Additional dependencies for Azure integration
+azure-identity
+azure-ai-projects~=1.0.0b11
+azure-identity~=1.20.0
+ansible-core~=2.17.0

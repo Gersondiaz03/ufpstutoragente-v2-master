@@ -1,15 +1,13 @@
 # agent_v2_simple.py - Simplified Azure AI Foundry Agent Integration with Streaming
 import os
 import time
-import threading
-import queue
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from jose import JWTError, jwt
@@ -62,12 +60,6 @@ def get_azure_credential():
 # Initialize Azure AI Agents Client (using azure-ai-agents SDK)
 credential = get_azure_credential()
 agents_client = AgentsClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-
-# Store active threads per user (in production, use Redis or database)
-# Thread-safe dictionary access
-user_threads: Dict[str, str] = {}
-user_threads_lock = threading.Lock()
-
 
 # ────────────────────────── 3. Pydantic Models ──────────────────────────────
 class Pregunta(BaseModel):
@@ -138,21 +130,18 @@ app.add_middleware(
 
 
 # ────────────────────────── 6. Helper Functions ──────────────────────────────
-def get_or_create_thread(user_id: str) -> str:
-    """Get existing thread for user or create a new one (thread-safe)."""
-    with user_threads_lock:
-        if user_id not in user_threads:
-            thread = agents_client.threads.create()
-            user_threads[user_id] = thread.id
-            print(f"📝 Created new thread {thread.id} for user {user_id}")
-        return user_threads[user_id]
+def create_new_thread() -> str:
+    """Create a new thread for each request to allow concurrent processing."""
+    thread = agents_client.threads.create()
+    print(f"📝 Created new thread {thread.id}")
+    return thread.id
 
 
-async def get_or_create_thread_async(user_id: str) -> str:
-    """Async version: Get existing thread for user or create a new one."""
+async def create_new_thread_async() -> str:
+    """Async version: Create a new thread for each request."""
     # Run thread creation in thread pool to avoid blocking event loop
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, get_or_create_thread, user_id)
+    return await loop.run_in_executor(None, create_new_thread)
 
 
 def extract_user_id(request: Request, x_user_id: Optional[str] = None) -> str:
@@ -231,14 +220,20 @@ async def endpoint_consultar(
     Main chat endpoint using Azure AI Foundry Agent with STREAMING.
     Streams responses as they arrive for faster perceived performance.
     Supports concurrent requests with async/await.
+    
+    Creates a NEW thread for each request to allow true concurrency:
+    - Multiple users can ask questions simultaneously
+    - Same user can ask multiple questions without waiting
+    - No conflicts with active runs on threads
     """
     try:
         user_id = extract_user_id(request, x_user_id)
         
-        # Get or create thread asynchronously to avoid blocking
-        thread_id = await get_or_create_thread_async(user_id)
+        # Create a NEW thread for each request to allow concurrent processing
+        # This avoids "Can't add messages to thread while a run is active" errors
+        thread_id = await create_new_thread_async()
         
-        print(f"💬 User {user_id} asking: {pregunta.pregunta[:100]}...")
+        print(f"💬 User {user_id} asking in thread {thread_id}: {pregunta.pregunta[:100]}...")
 
         # Create message in thread (run in thread pool to avoid blocking)
         loop = asyncio.get_event_loop()

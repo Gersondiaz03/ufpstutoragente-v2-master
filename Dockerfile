@@ -19,7 +19,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copy application code
 COPY agent_v2_simple.py .
-COPY .env .
 
 # Expose port
 EXPOSE 8100

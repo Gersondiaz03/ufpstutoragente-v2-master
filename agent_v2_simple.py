@@ -327,23 +327,20 @@ async def list_vector_store_files(vector_store_id: str, request: Request):
         # Get files from vector store with pagination
         files_list = []
         after = None
-        
+
         while True:
             # List files with pagination
             if after:
                 files_page = agents_client.vector_store_files.list(
-                    vector_store_id=vector_store_id,
-                    limit=100,
-                    after=after
+                    vector_store_id=vector_store_id, limit=100, after=after
                 )
             else:
                 files_page = agents_client.vector_store_files.list(
-                    vector_store_id=vector_store_id,
-                    limit=100
+                    vector_store_id=vector_store_id, limit=100
                 )
-            
+
             # Process files in current page
-            for file in files_page.data if hasattr(files_page, 'data') else files_page:
+            for file in files_page.data if hasattr(files_page, "data") else files_page:
                 try:
                     # Get file details
                     file_details = agents_client.files.get(file_id=file.id)
@@ -358,31 +355,45 @@ async def list_vector_store_files(vector_store_id: str, request: Request):
                             "created_at": (
                                 file.created_at if hasattr(file, "created_at") else None
                             ),
-                            "status": file.status if hasattr(file, "status") else "unknown",
-                            "size": file_details.bytes if hasattr(file_details, "bytes") else 0,
+                            "status": (
+                                file.status if hasattr(file, "status") else "unknown"
+                            ),
+                            "size": (
+                                file_details.bytes
+                                if hasattr(file_details, "bytes")
+                                else 0
+                            ),
                         }
                     )
                 except Exception as file_error:
-                    print(f"⚠️ Error getting details for file {file.id}: {str(file_error)}")
+                    print(
+                        f"⚠️ Error getting details for file {file.id}: {str(file_error)}"
+                    )
                     # Add file with minimal info
                     files_list.append(
                         {
                             "id": file.id,
                             "filename": "Unknown",
-                            "created_at": file.created_at if hasattr(file, "created_at") else None,
-                            "status": file.status if hasattr(file, "status") else "unknown",
+                            "created_at": (
+                                file.created_at if hasattr(file, "created_at") else None
+                            ),
+                            "status": (
+                                file.status if hasattr(file, "status") else "unknown"
+                            ),
                             "size": 0,
                         }
                     )
-            
+
             # Check if there are more pages
-            if hasattr(files_page, 'has_more') and files_page.has_more:
+            if hasattr(files_page, "has_more") and files_page.has_more:
                 # Get last file ID for pagination
-                last_file = list(files_page.data if hasattr(files_page, 'data') else files_page)[-1]
+                last_file = list(
+                    files_page.data if hasattr(files_page, "data") else files_page
+                )[-1]
                 after = last_file.id
             else:
                 break
-        
+
         print(f"📂 Listed {len(files_list)} files from vector store {vector_store_id}")
         return {"files": files_list, "vector_store_id": vector_store_id}
 

@@ -213,48 +213,60 @@ async def endpoint_consultar(
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
     """
-    Main chat endpoint using Azure AI Foundry Agent.
-    Handles user questions with context and maintains conversation threads.
+    Main chat endpoint using Azure AI Foundry Agent with STREAMING.
+    Streams responses as they arrive for faster perceived performance.
     """
     try:
         user_id = extract_user_id(request, x_user_id)
         thread_id = get_or_create_thread(user_id)
+        
+        print(f"💬 User {user_id} asking: {pregunta.pregunta[:100]}...")
 
         # Create message in thread
         message = project_client.agents.messages.create(
             thread_id=thread_id, role=MessageRole.USER, content=pregunta.pregunta
         )
 
-        # Run the agent
-        run = project_client.agents.runs.create_and_process(
-            thread_id=thread_id, agent_id=AGENT_ID
+        # Create streaming generator
+        async def generate_response():
+            try:
+                # Stream the agent run instead of blocking
+                with project_client.agents.runs.create_stream(
+                    thread_id=thread_id,
+                    agent_id=AGENT_ID
+                ) as stream:
+                    # Iterate through streaming events
+                    for event_type, event_data, _ in stream:
+                        # Stream text deltas as they arrive
+                        if event_type == "thread.message.delta":
+                            for content_part in event_data.delta.content:
+                                if content_part.type == "text":
+                                    text_value = content_part.text.value
+                                    if text_value:
+                                        yield text_value
+                        
+                        # Handle errors
+                        elif event_type == "thread.run.failed":
+                            error_msg = "Error: El agente falló al procesar la solicitud"
+                            print(f"❌ Run failed: {event_data}")
+                            yield f"\n\n{error_msg}"
+                            break
+                
+                print(f"✅ Stream completed for user {user_id}")
+                        
+            except Exception as e:
+                error_msg = f"\n\nError al consultar el agente: {str(e)}"
+                print(f"❌ Error in stream: {str(e)}")
+                yield error_msg
+
+        return StreamingResponse(
+            generate_response(),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+            }
         )
-
-        # Check for errors
-        if run.status == "failed":
-            error_msg = (
-                f"El agente falló: {run.last_error}"
-                if run.last_error
-                else "Error desconocido"
-            )
-            return JSONResponse(content={"error": error_msg}, status_code=500)
-
-        # Get messages (most recent first)
-        messages = project_client.agents.messages.list(
-            thread_id=thread_id, order=ListSortOrder.DESCENDING, limit=1
-        )
-
-        # Extract the agent's response
-        response_text = "No se recibió respuesta del agente."
-        if messages.data and len(messages.data) > 0:
-            last_message = messages.data[0]
-            if (
-                last_message.role == MessageRole.ASSISTANT
-                and last_message.text_messages
-            ):
-                response_text = last_message.text_messages[-1].text.value
-
-        return PlainTextResponse(content=response_text.strip())
 
     except Exception as e:
         print(f"❌ Error in consultar: {str(e)}")

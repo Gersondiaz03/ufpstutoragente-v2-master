@@ -1,13 +1,15 @@
-# agent_v2_simple.py - Simplified Azure AI Foundry Agent Integration
+# agent_v2_simple.py - Simplified Azure AI Foundry Agent Integration with Streaming
 import os
 import time
+import threading
+import queue
 from pathlib import Path
 from typing import Optional, Dict
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from jose import JWTError, jwt
@@ -15,6 +17,7 @@ from jose import JWTError, jwt
 # Azure AI Foundry imports
 from azure.ai.agents import AgentsClient
 from azure.identity import DefaultAzureCredential, ClientSecretCredential
+import asyncio
 
 # ────────────────────────── 1. ENV y CREDENCIALES ──────────────────────────
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
@@ -56,12 +59,14 @@ def get_azure_credential():
         return DefaultAzureCredential(exclude_interactive_browser_credential=True)
 
 
-# Initialize Azure AI Agents Client
+# Initialize Azure AI Agents Client (using azure-ai-agents SDK)
 credential = get_azure_credential()
 agents_client = AgentsClient(endpoint=PROJECT_ENDPOINT, credential=credential)
 
 # Store active threads per user (in production, use Redis or database)
+# Thread-safe dictionary access
 user_threads: Dict[str, str] = {}
+user_threads_lock = threading.Lock()
 
 
 # ────────────────────────── 3. Pydantic Models ──────────────────────────────
@@ -134,12 +139,20 @@ app.add_middleware(
 
 # ────────────────────────── 6. Helper Functions ──────────────────────────────
 def get_or_create_thread(user_id: str) -> str:
-    """Get existing thread for user or create a new one."""
-    if user_id not in user_threads:
-        thread = agents_client.threads.create()
-        user_threads[user_id] = thread.id
-        print(f"📝 Created new thread {thread.id} for user {user_id}")
-    return user_threads[user_id]
+    """Get existing thread for user or create a new one (thread-safe)."""
+    with user_threads_lock:
+        if user_id not in user_threads:
+            thread = agents_client.threads.create()
+            user_threads[user_id] = thread.id
+            print(f"📝 Created new thread {thread.id} for user {user_id}")
+        return user_threads[user_id]
+
+
+async def get_or_create_thread_async(user_id: str) -> str:
+    """Async version: Get existing thread for user or create a new one."""
+    # Run thread creation in thread pool to avoid blocking event loop
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, get_or_create_thread, user_id)
 
 
 def extract_user_id(request: Request, x_user_id: Optional[str] = None) -> str:
@@ -215,55 +228,119 @@ async def endpoint_consultar(
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
     """
-    Main chat endpoint using Azure AI Foundry Agent.
-    Handles user questions with context and maintains conversation threads.
+    Main chat endpoint using Azure AI Foundry Agent with STREAMING.
+    Streams responses as they arrive for faster perceived performance.
+    Supports concurrent requests with async/await.
     """
     try:
         user_id = extract_user_id(request, x_user_id)
-        thread_id = get_or_create_thread(user_id)
+        
+        # Get or create thread asynchronously to avoid blocking
+        thread_id = await get_or_create_thread_async(user_id)
+        
+        print(f"💬 User {user_id} asking: {pregunta.pregunta[:100]}...")
 
-        print(f"💬 User {user_id} asking: {pregunta.pregunta[:50]}...")
-
-        # Create message in thread
-        message = agents_client.messages.create(
-            thread_id=thread_id, role="user", content=pregunta.pregunta
-        )
-
-        # Run the agent and wait for completion
-        run = agents_client.runs.create_and_process(
-            thread_id=thread_id, agent_id=AGENT_ID
-        )
-
-        print(f"🤖 Run status: {run.status}")
-
-        # Check for errors
-        if run.status == "failed":
-            error_msg = (
-                f"El agente falló: {run.last_error}"
-                if hasattr(run, "last_error") and run.last_error
-                else "Error desconocido"
+        # Create message in thread (run in thread pool to avoid blocking)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: agents_client.messages.create(
+                thread_id=thread_id, role="user", content=pregunta.pregunta
             )
-            return JSONResponse(content={"error": error_msg}, status_code=500)
+        )
 
-        # Get messages
-        messages = agents_client.messages.list(thread_id=thread_id)
+        # Use create_and_process (proven to work) in async manner
+        # Simulate streaming by sending response character-by-character for better UX
+        async def generate_response():
+            try:
+                def get_agent_response():
+                    """Get agent response using create_and_process (blocking, runs in thread)."""
+                    try:
+                        # Run the agent and wait for completion
+                        run = agents_client.runs.create_and_process(
+                            thread_id=thread_id, 
+                            agent_id=AGENT_ID
+                        )
+                        
+                        print(f"🤖 Run status: {run.status}")
+                        
+                        # Check for errors
+                        if run.status == "failed":
+                            error_msg = (
+                                f"El agente falló: {run.last_error}"
+                                if hasattr(run, "last_error") and run.last_error
+                                else "Error desconocido"
+                            )
+                            return None, error_msg
+                        
+                        # Get messages
+                        messages = list(agents_client.messages.list(thread_id=thread_id))
+                        
+                        # Extract the agent's response (iterate through messages)
+                        response_text = "No se recibió respuesta del agente."
+                        for msg in messages:
+                            if msg.role == "assistant" and hasattr(msg, "text_messages") and msg.text_messages:
+                                # Use text_messages helper property
+                                response_text = "".join([tm.text.value for tm in msg.text_messages])
+                                break
+                        
+                        print(f"✅ Response received: {len(response_text)} characters")
+                        return response_text.strip(), None
+                    
+                    except Exception as e:
+                        print(f"❌ Error in get_agent_response: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
+                        return None, str(e)
+                
+                # Run agent in thread pool to avoid blocking
+                response_text, error = await loop.run_in_executor(None, get_agent_response)
+                
+                if error:
+                    error_text = f"\n\nError: {error}"
+                    yield error_text.encode('utf-8')
+                    return
+                
+                if not response_text:
+                    no_response = "No se recibió respuesta del agente."
+                    yield no_response.encode('utf-8')
+                    return
+                
+                # Send response in chunks for streaming effect
+                # Encode to bytes for proper streaming
+                chunk_size = 100  # Bytes per chunk
+                response_bytes = response_text.encode('utf-8')
+                
+                # Send in chunks to enable streaming
+                for i in range(0, len(response_bytes), chunk_size):
+                    chunk_bytes = response_bytes[i:i + chunk_size]
+                    yield chunk_bytes
+                    # Small delay to allow frontend to process chunks
+                    await asyncio.sleep(0.005)  # 5ms delay between chunks
+                
+                print(f"✅ Response streamed for user {user_id} ({len(response_text)} chars)")
+                        
+            except Exception as e:
+                error_msg = f"\n\nError al consultar el agente: {str(e)}"
+                print(f"❌ Error in generate_response: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                yield error_msg.encode('utf-8')
 
-        # Extract the agent's response (iterate through messages)
-        response_text = "No se recibió respuesta del agente."
-        for msg in messages:
-            if msg.role == "assistant" and msg.text_messages:
-                # Use text_messages helper property (from documentation)
-                last_text = msg.text_messages[-1]
-                response_text = last_text.text.value
-                break
-
-        print(f"✅ Response: {response_text[:100]}...")
-        return PlainTextResponse(content=response_text.strip())
+        return StreamingResponse(
+            generate_response(),
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+                "Connection": "keep-alive",
+                "Transfer-Encoding": "chunked",
+            }
+        )
 
     except Exception as e:
         print(f"❌ Error in consultar: {str(e)}")
         import traceback
-
         traceback.print_exc()
         return JSONResponse(
             content={"error": f"Error al consultar el agente: {str(e)}"},
